@@ -1,0 +1,19 @@
+2025-04-20 22:43:43,558 - __main__ - INFO - Starting bot
+2025-04-20 22:43:43,559 - aiogram.dispatcher - INFO - Start polling
+2025-04-20 22:43:44,008 - aiogram.dispatcher - INFO - Run polling for bot @test1234xbot id=8141316524 - 'test'
+2025-04-20 22:44:45,823 - __main__ - INFO - User 630841763 started the bot
+2025-04-20 22:44:46,274 - __main__ - INFO - Start message sent to user 630841763
+2025-04-20 22:44:46,275 - aiogram.event - INFO - Update id=856796644 is handled. Duration 452 ms by bot id=8141316524
+2025-04-21 00:02:19,123 - aiogram.dispatcher - INFO - Polling stopped
+2025-04-21 00:02:19,856 - __main__ - INFO - Bot stopped
+2025-04-21 00:02:19,991 - aiogram.dispatcher - INFO - Polling stopped for bot @test1234xbot id=8141316524 - 'test'
+2025-04-21 00:02:20,058 - __main__ - INFO - Bot stopped by user
+2025-04-21 00:02:33,387 - __main__ - INFO - Starting bot
+2025-04-21 00:02:33,388 - aiogram.dispatcher - INFO - Start polling
+2025-04-21 00:02:33,847 - aiogram.dispatcher - INFO - Run polling for bot @test1234xbot id=8141316524 - 'test'
+2025-04-21 00:02:38,480 - __main__ - INFO - User 630841763 started the bot
+2025-04-21 00:02:39,041 - __main__ - INFO - Start message sent to user 630841763
+2025-04-21 00:02:39,041 - aiogram.event - INFO - Update id=856796645 is handled. Duration 561 ms by bot id=8141316524
+2025-04-21 11:46:46,165 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error
+2025-04-21 11:46:46,976 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8141316524)
+2025-04-21 11:46:58,914 - aiogram.dispatcher - INFO - Connection established (tryings = 1, bot id = 8141316524)

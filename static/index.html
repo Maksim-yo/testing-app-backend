@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Quiz</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+:root {
+  --tg-theme-bg-color: #efeff3;
+  --tg-theme-button-color: #2481cc;
+  --tg-theme-text-color: #000000;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  margin: 0;
+  padding: 16px;
+  background: var(--tg-theme-bg-color);
+  color: var(--tg-theme-text-color);
+}
+
+.progress-bar {
+  height: 6px;
+  background: #e0e0e0;
+  border-radius: 3px;
+  margin: 12px 0;
+}
+
+.option {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  margin: 8px 0;
+  border: none;
+  border-radius: 10px;
+  background: white;
+  text-align: left;
+  font-size: 16px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.option:active {
+  background: #f0f0f0;
+}
+
+#next-btn {
+  width: 100%;
+  padding: 12px;
+  background: var(--tg-theme-button-color);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-weight: bold;
+}
+    </style>
+</head>
+<body>
+    <h1>Тест</h1>
+    <div id="quiz-container">
+        <p>Вопрос 1: Какой язык программирования вы используете?</p>
+        <input type="radio" name="q1" value="Python"> Python<br>
+        <input type="radio" name="q1" value="JavaScript"> JavaScript<br>
+    </div>
+    <button onclick="submitQuiz()">Отправить</button>
+    <div class="container">
+      <header>
+        <h1>Тест знаний Python</h1>
+        <div class="progress-bar">
+          <div class="progress" style="width: 30%"></div>
+        </div>
+        <p>Вопрос 3 из 10</p>
+      </header>
+
+      <div class="question">
+        <h2>Что делает метод list.append()?</h2>
+        <div class="options">
+          <button class="option">Добавляет элемент в конец списка</button>
+          <button class="option">Удаляет последний элемент</button>
+          <button class="option">Сортирует список</button>
+        </div>
+      </div>
+
+      <footer>
+        <button id="next-btn" disabled>Далее</button>
+      </footer>
+    </div>
+    <script>
+        // Инициализация Telegram Web App
+        Telegram.WebApp.ready();
+        Telegram.WebApp.expand();
+
+        // Отправка данных в FastAPI
+        async function submitQuiz() {
+            const answers = [
+                document.querySelector('input[name="q1"]:checked')?.value || "No answer"
+            ];
+
+            const response = await fetch("http://your-server-ip:8000/submit-quiz", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_id: Telegram.WebApp.initDataUnsafe.user?.id,
+                    answers: answers
+                })
+            });
+
+            if (response.ok) {
+                Telegram.WebApp.close();
+            }
+        }
+    </script>
+</body>
+</html>
+
