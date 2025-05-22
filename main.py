@@ -29,6 +29,8 @@ class Base(DeclarativeBase):
     pass
 from fastapi.middleware.cors import CORSMiddleware
 
+app_host_url = os.getenv("APP_HOST_URL", "http://localhost:3000")  # Значение по умолчанию
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # вместо '*'
@@ -37,7 +39,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app_host_url = os.getenv("APP_HOST_URL")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.on_event("startup")
