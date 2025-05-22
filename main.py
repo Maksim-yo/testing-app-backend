@@ -36,8 +36,11 @@ app.add_middleware(
     allow_origins=[app_host_url],  # вместо '*'
     allow_credentials=True,                  # разрешить куки и Authorization
 
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],  # Явное указание
+    allow_headers=["Authorization", "Content-Type", "Accept"],  # Важно включить Authorization
+    expose_headers=["*"],  # Для доступа к кастомным заголовкам
+    max_age=600,  # Время кэширования preflight
+
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
