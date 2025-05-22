@@ -33,7 +33,7 @@ app_host_url = os.getenv("APP_HOST_URL", "http://localhost:3000")  # Значе�
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # вместо '*'
+    allow_origins=[app_host_url],  # вместо '*'
     allow_credentials=True,                  # разрешить куки и Authorization
 
     allow_methods=["*"],
