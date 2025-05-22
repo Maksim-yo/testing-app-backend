@@ -22,7 +22,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-def get_url():
+def get_database_url():
     return os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
 
 # add your model's MetaData object here
