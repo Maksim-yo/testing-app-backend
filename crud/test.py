@@ -5,13 +5,151 @@ from models import Employee, Test, Question, BelbinQuestion, BelbinAnswer, TestS
 from fastapi import HTTPException, status
 from schemas.test import Test as TestSchema, TestWithAnswersSchema, UserAnswer as UserAnswerSchema, UserAnswerCreate, TestAssignmentCreate, SafeTest, SafeAnswer, SafeBelbinAnswer, SafeBelbinQuestion, SafeQuestion, TestResultSchema
 from datetime import datetime, timezone, timedelta
-from typing import List, Set
+from typing import List, Set, Tuple, Dict, Iterable
 from sqlalchemy import insert, delete, and_
 from sqlalchemy.exc import IntegrityError
 import json
 from sqlalchemy import select
 
 from collections import defaultdict
+
+
+def auto_complete_expired_tests(results: Iterable[TestResult], db: Session, now: datetime | None = None) -> None:
+    """Завершает тесты, если истекло отведенное время прохождения."""
+    now = now or datetime.now(timezone.utc)
+
+    for result in results:
+        test = result.test
+        started_at = result.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+
+        if not result.is_completed and test.time_limit_minutes is not None:
+            elapsed = now - started_at
+            if elapsed > timedelta(minutes=test.time_limit_minutes):
+                # Нужно найти clerk_id пользователя, которому принадлежит результат
+                clerk_id = result.employee.clerk_id
+                complete_test(db, user_id=clerk_id, test_id=test.id)
+
+  
+def get_belbin_answers_data(db: Session, test_id: int, employee_id: int) -> Dict:
+    """Получить данные о ответах пользователя на вопросы Белбина."""
+    belbin_user_answers = db.query(UserBelbinAnswer).filter(
+        and_(
+            UserBelbinAnswer.test_id == test_id,
+            UserBelbinAnswer.employee_id == employee_id
+        )
+    ).all()
+
+    return {uba.answer_id: uba.score for uba in belbin_user_answers}
+
+
+def build_safe_questions(questions: List[model.Question], user_answers_data: Tuple) -> List[SafeQuestion]:
+    """Сформировать SafeQuestion объекты с информацией о ответах пользователя."""
+    user_answers_by_qid, answer_ids_by_question = user_answers_data
+    safe_questions = []
+    
+    for question in questions:
+        safe_answers = build_safe_answers(question, user_answers_by_qid, answer_ids_by_question)
+        
+        safe_questions.append(SafeQuestion(
+            id=question.id,
+            text=question.text,
+            question_type=question.question_type,
+            order=question.order,
+            test_id=question.test_id,
+            image=question.image,
+            answers=safe_answers
+        ))
+    
+    return safe_questions
+
+
+def build_safe_answers(question: model.Question, user_answers_by_qid: Dict, answer_ids_by_question: Dict) -> List[SafeAnswer]:
+    """Сформировать SafeAnswer объекты для вопроса."""
+    safe_answers = []
+    user_answer = user_answers_by_qid.get(question.id)
+    selected_answer_ids = answer_ids_by_question.get(question.id, set())
+
+    if question.question_type == "text_answer" and user_answer and user_answer.text_response:
+        safe_answers.append(SafeAnswer(
+            id=None,
+            question_id=question.id,
+            text=user_answer.text_response,
+            image=None,
+            is_user_answer=True
+        ))
+    else:
+        for answer in question.answers:
+            safe_answers.append(SafeAnswer(
+                id=answer.id,
+                question_id=answer.question_id,
+                text="" if question.question_type == "text_answer" else answer.text,
+                image=answer.image,
+                is_user_answer=(answer.id in selected_answer_ids)
+            ))
+    
+    return safe_answers
+
+
+def build_safe_belbin_questions(belbin_questions: List[model.BelbinQuestion], belbin_scores: Dict) -> List[SafeBelbinQuestion]:
+    """Сформировать SafeBelbinQuestion объекты с информацией о ответах пользователя."""
+    return [
+        SafeBelbinQuestion(
+            id=bq.id,
+            text=bq.text,
+            block_number=bq.block_number,
+            order=bq.order,
+            test_id=bq.test_id,
+            answers=[
+                SafeBelbinAnswer(
+                    id=ans.id,
+                    question_id=ans.question_id,
+                    text=ans.text,
+                    user_score=belbin_scores.get(ans.id)
+                )
+                for ans in bq.answers
+            ]
+        )
+        for bq in belbin_questions
+    ]
+
+
+def determine_test_status(db: Session, test: model.Test, employee_id: int, now: datetime) -> str:
+    """Определить статус теста для пользователя."""
+    if test.end_date and test.end_date < now:
+        return "expired"
+    
+    result = db.query(model.TestResult).filter(
+        model.TestResult.test_id == test.id,
+        model.TestResult.employee_id == employee_id
+    ).first()
+
+    if result and result.completed_at:
+        return "completed"
+    elif result and result.started_at:
+        return "in_progress"
+    else:
+        return "not_started"
+
+
+def create_safe_test_schema(test: model.Test, status: str, 
+                           questions: List[SafeQuestion], 
+                           belbin_questions: List[SafeBelbinQuestion]) -> SafeTest:
+    """Создать финальный SafeTest объект."""
+    return SafeTest(
+        id=test.id,
+        title=test.title,
+        description=test.description,
+        is_active=test.is_active,
+        created_at=test.created_at,
+        updated_at=test.updated_at,
+        end_date=test.end_date,
+        status=status,
+        questions=questions,
+        belbin_questions=belbin_questions,
+        time_limit_minutes=test.time_limit_minutes
+    )
 
 def answers_changed(old_answers, new_answers, belbin=False):
     if len(old_answers) != len(new_answers):
@@ -35,7 +173,9 @@ def get_changed_question_ids(db_test, update_data) -> tuple[Set[int], Set[int], 
 
     new_questions = update_data.get("questions", [])
     new_belbin_questions = update_data.get("belbin_questions", [])
-
+    for q in new_questions:
+        print(q )
+        print("\n")
     changed_question_ids = set()
     changed_belbin_question_ids = set()
 
@@ -45,6 +185,7 @@ def get_changed_question_ids(db_test, update_data) -> tuple[Set[int], Set[int], 
         if q_id:
             new_q_ids.add(q_id)
             old_q = old_questions.get(q_id)
+
             if old_q:
                 is_answers_changed = answers_changed(
                     [dict(text=a.text, is_correct=a.is_correct, id=a.id) for a in old_q.answers],
@@ -387,74 +528,247 @@ def get_tests_by_position(db: Session, position_id: int, user_id: str):
         model.Test.is_active == True,
         model.Test.created_by == user_id
     ).all()
-def update_test(db: Session, test_id: int, test_update: schema.TestCreate, user_id: str):
+def update_test(db: Session, test_id: int, test_update: schema.Test, user_id: str):
+    # Проверка прав и получение теста
     db_employee = check_user_permissions(db, user_id, True)
-    db_test = db.query(model.Test).filter(
-        model.Test.id == test_id,
-        model.Test.created_by == db_employee.id
-    ).first()
+    db_test = get_test_for_update(db, test_id, db_employee.id)
     if not db_test:
         return None
 
+    # Подготовка данных обновления
     update_data = test_update.model_dump(exclude_unset=True)
+    
+    # Обработка изменений вопросов и ответов
+    process_question_changes(db, test_id, db_test, update_data)
+    
+    # Обновление основных полей теста
+    update_test_fields(db_test, update_data)
+    
+    # Фиксация изменений
+    db.commit()
+    db.refresh(db_test)
+    return db_test
 
+
+def get_test_for_update(db: Session, test_id: int, employee_id: int) -> model.Test | None:
+    """Получить тест для обновления с проверкой владельца."""
+    return db.query(model.Test).filter(
+        model.Test.id == test_id,
+        model.Test.created_by == employee_id
+    ).first()
+
+
+def process_question_changes(db: Session, test_id: int, db_test: model.Test, update_data: dict):
+    """Обработка изменений вопросов и связанных данных."""
+    # Определение измененных вопросов
     changed_question_ids, changed_belbin_question_ids, removed_q_ids, removed_bq_ids = get_changed_question_ids(
         db_test, update_data
     )
-
+    
+    # Удаление ответов на измененные вопросы
     remove_changed_answers(
         db, test_id,
         changed_question_ids,
         changed_belbin_question_ids
     )
 
-    if removed_q_ids or removed_bq_ids or any(q.get("id") is None for q in update_data.get("questions", []) + update_data.get("belbin_questions", [])):
+    # Очистка результатов теста при значительных изменениях
+    if changed_question_ids or changed_belbin_question_ids:
         db.query(model.TestResult).filter(model.TestResult.test_id == test_id).delete(synchronize_session=False)
 
+    # Обновление настроек теста
     handle_test_settings(db, db_test, update_data.pop("test_settings", None))
 
+    # Обновление обычных вопросов
+    if "questions" in update_data:
+        update_regular_questions(db_test, update_data["questions"])
+
+    # Обновление вопросов Белбина
+    if "belbin_questions" in update_data:
+        update_belbin_questions(db_test, update_data["belbin_questions"])
+
+
+def should_clear_test_results(update_data: dict, removed_q_ids: set, removed_bq_ids: set) -> bool:
+    """Определить, нужно ли очищать результаты теста."""
+    has_new_questions = any(q.get("id") is None 
+                    for q in update_data.get("questions", []) + update_data.get("belbin_questions", []))
+    return removed_q_ids or removed_bq_ids or has_new_questions
+
+
+def update_test_fields(db_test: model.Test, update_data: dict):
+    """Обновление основных полей теста."""
     for field, value in update_data.items():
-        if field in ["questions", "belbin_questions"]:
+        if field in ["questions", "belbin_questions", "test_settings"]:
             continue
         setattr(db_test, field, value)
     db_test.updated_at = datetime.now(timezone.utc)
 
-    # Обновление обычных вопросов
-    if "questions" in update_data:
-        db_test.questions.clear()
-        for q_data in update_data["questions"]:
-            answers_data = q_data.pop("answers", [])
-            question = model.Question(**q_data)
-            for a_data in answers_data:
-                answer = model.Answer(**a_data)
-                question.answers.append(answer)
-            db_test.questions.append(question)
 
-    # Обновление белбиновских вопросов
-    if "belbin_questions" in update_data:
-        db_test.belbin_questions.clear()
-        for bq_data in update_data["belbin_questions"]:
-            answers_data = bq_data.pop("answers", [])
-            belbin_question = model.BelbinQuestion(
-                text=bq_data["text"],
-                block_number=bq_data["block_number"],
-                order=bq_data["order"]
-            )
-            for ba_data in answers_data:
-                belbin_answer = model.BelbinAnswer(
-                    text=ba_data["text"],
-                    role_id=ba_data["role_id"]
-                )
-                belbin_question.answers.append(belbin_answer)
-            db_test.belbin_questions.append(belbin_question)
+def update_regular_questions(db_test: model.Test, questions_data: list[dict]):
+    """Обновление обычных вопросов теста."""
+    existing_questions = {q.id: q for q in db_test.questions}
+    new_questions = []
 
-    db.commit()
-    db.refresh(db_test)
-    return db_test
+    for q_data in questions_data:
+        answers_data = q_data.pop("answers", [])
+        q_id = q_data.get("id")
+
+        if q_id and q_id in existing_questions:
+            update_existing_question(existing_questions[q_id], q_data, answers_data)
+        else:
+            new_questions.append(create_new_question(q_data, answers_data))
+
+    # Удаление отсутствующих вопросов
+    new_q_ids = {q.get("id") for q in questions_data if q.get("id")}
+    remove_missing_questions(db_test, new_q_ids)
+
+    # Добавление новых вопросов
+    db_test.questions.extend(new_questions)
+
+
+def update_existing_question(question: model.Question, q_data: dict, answers_data: list[dict]):
+    """Обновление существующего вопроса и его ответов."""
+    question.text = q_data["text"]
+    # обновляем другие поля при необходимости
+
+    existing_answers = {answer.id: answer for answer in question.answers}
+    incoming_ids = set()
+    
+    for a_data in answers_data:
+        a_id = a_data.get("id")
+        if a_id and a_id in existing_answers:
+            # Обновляем существующий ответ
+            ans = existing_answers[a_id]
+            ans.text = a_data["text"]
+            ans.image = a_data.get("image")  # если нужно
+            incoming_ids.add(a_id)
+        else:
+            # Добавляем новый ответ
+            a_data.pop("id", None)  # на всякий случай
+            new_answer = model.Answer(**a_data)
+            question.answers.append(new_answer)
+
+    # Удаляем ответы, которых нет в входных данных
+    question.answers[:] = [ans for ans in question.answers if ans.id is None or ans.id in incoming_ids]
+
+
+
+def create_new_question(q_data: dict, answers_data: list[dict]) -> model.Question:
+    """Создание нового вопроса."""
+    q_data.pop("id", None)
+    question = model.Question(**q_data)
+    for a_data in answers_data:
+        a_data.pop("id", None)
+        question.answers.append(model.Answer(**a_data))
+    return question
+
+
+def remove_missing_questions(db_test: model.Test, new_q_ids: set[int]):
+    """Удаление вопросов, которых нет в новых данных."""
+    for q in db_test.questions[:]:
+        if q.id not in new_q_ids:
+            db_test.questions.remove(q)
+
+
+def update_belbin_questions(db_test: model.Test, belbin_questions_data: list[dict]):
+    """Обновление вопросов Белбина."""
+    existing_bq = {bq.id: bq for bq in db_test.belbin_questions}
+    new_belbin_questions = []
+
+    for bq_data in belbin_questions_data:
+        answers_data = bq_data.pop("answers", [])
+        bq_id = bq_data.get("id")
+
+        if bq_id and bq_id in existing_bq:
+            update_existing_belbin_question(existing_bq[bq_id], bq_data, answers_data)
+        else:
+            new_belbin_questions.append(create_new_belbin_question(bq_data, answers_data))
+
+    # Удаление отсутствующих вопросов
+    incoming_bq_ids = {bq.get("id") for bq in belbin_questions_data if bq.get("id")}
+    remove_missing_belbin_questions(db_test, incoming_bq_ids)
+
+    # Добавление новых вопросов
+    db_test.belbin_questions.extend(new_belbin_questions)
+
+
+def update_existing_belbin_question(belbin_question: model.BelbinQuestion, bq_data: dict, answers_data: list[dict]):
+    """Обновление существующего вопроса Белбина."""
+    belbin_question.text = bq_data["text"]
+    belbin_question.block_number = bq_data["block_number"]
+    belbin_question.order = bq_data["order"]
+    
+    # Обновление ответов
+    belbin_question.answers.clear()
+    for ba_data in answers_data:
+        ba_data.pop("id", None)
+        belbin_question.answers.append(model.BelbinAnswer(**ba_data))
+
+
+def create_new_belbin_question(bq_data: dict, answers_data: list[dict]) -> model.BelbinQuestion:
+    """Создание нового вопроса Белбина."""
+    bq_data.pop("id", None)
+    belbin_question = model.BelbinQuestion(**bq_data)
+    for ba_data in answers_data:
+        ba_data.pop("id", None)
+        belbin_question.answers.append(model.BelbinAnswer(**ba_data))
+    return belbin_question
+
+
+def remove_missing_belbin_questions(db_test: model.Test, incoming_bq_ids: set[int]):
+    """Удаление вопросов Белбина, которых нет в новых данных."""
+    for bq in db_test.belbin_questions[:]:
+        if bq.id not in incoming_bq_ids:
+            db_test.belbin_questions.remove(bq)
+
 
 def get_assigned_tests_for_employee(db: Session, user_id: str) -> List[SafeTest]:
+    """Получить список назначенных тестов для сотрудника с информацией о статусе и ответах."""
     now = datetime.now(timezone.utc)
     user = get_current_user(db, user_id)
+
+    # Получаем все назначенные тесты
+    tests = get_assigned_tests(db, user_id)
+    
+    result_schemas = []
+    for test in tests:
+        if test.status == "draft":
+            continue
+        
+        # Получаем данные о ответах пользователя
+        user_answers_data = get_user_answers_data(db, test.id, user.id)
+        belbin_answers_data = get_belbin_answers_data(db, test.id, user.id)
+        
+        # Формируем вопросы с ответами
+        safe_questions = build_safe_questions(test.questions, user_answers_data)
+        safe_belbin_questions = build_safe_belbin_questions(test.belbin_questions, belbin_answers_data)
+        
+        # Определяем статус теста
+        status = determine_test_status(db, test, user.id, now)
+        
+        # Собираем финальную схему
+        result_schemas.append(create_safe_test_schema(test, status, safe_questions, safe_belbin_questions))
+
+    return result_schemas
+
+def get_user_test_results(db: Session, user_id: str) -> List[TestResult]:
+       return (
+        db.query(TestResult)
+        .join(TestResult.test)
+        .join(Test.assigned_to)
+        .filter(Employee.clerk_id == user_id)
+        .all()
+    )
+
+
+
+def get_assigned_tests(db: Session, user_id: str) -> List[model.Test]:
+    """Получить список тестов, назначенных пользователю."""
+    user = get_current_user(db, user_id)
+    now = datetime.now(timezone.utc)
+
+    tests_results = get_user_test_results(db, user_id)
+    auto_complete_expired_tests(tests_results, db, now)
 
     tests = (
         db.query(model.Test)
@@ -462,141 +776,50 @@ def get_assigned_tests_for_employee(db: Session, user_id: str) -> List[SafeTest]
         .filter(Employee.clerk_id == user_id)
         .options(
             selectinload(model.Test.questions).selectinload(model.Question.answers),
-            selectinload(model.Test.belbin_questions).selectinload(model.BelbinQuestion.answers).selectinload(BelbinAnswer.role),
+            selectinload(model.Test.belbin_questions)
+                .selectinload(model.BelbinQuestion.answers)
+                .selectinload(BelbinAnswer.role),
             selectinload(model.Test.assigned_to),
             selectinload(model.Test.test_settings),
+            selectinload(model.Test.results)
         )
         .all()
     )
 
-    result_schemas = []
 
-    for test in tests:
-        # Получаем ответы пользователя
+    return tests
 
-        if test.status == "draft":
-            continue
-        
-        user_answers = db.query(UserAnswer).filter(
-            and_(
-                UserAnswer.test_id == test.id,
-                UserAnswer.employee_id == user.id
-            )
-        ).all()
 
-        user_answers_by_qid = {ua.question_id: ua for ua in user_answers}
-        user_answer_ids = [ua.id for ua in user_answers]
-        user_answer_items = db.query(UserAnswerItem).filter(
-            UserAnswerItem.user_answer_id.in_(user_answer_ids)
-        ).all()
-        answer_ids_by_question = defaultdict(set)
+def get_user_answers_data(db: Session, test_id: int, employee_id: int) -> Tuple[Dict, Dict, Dict]:
+    """Получить данные о ответах пользователя на обычные вопросы."""
+    # Получаем UserAnswer записи
+    user_answers = db.query(UserAnswer).filter(
+        and_(
+            UserAnswer.test_id == test_id,
+            UserAnswer.employee_id == employee_id
+        )
+    ).all()
 
-        # Получаем белбин-ответы
-        belbin_user_answers = db.query(UserBelbinAnswer).filter(
-            and_(
-                UserBelbinAnswer.test_id == test.id,
-                UserBelbinAnswer.employee_id == user.id
-            )
-        ).all()
+    # Сопоставляем question_id с UserAnswer
+    user_answers_by_qid = {ua.question_id: ua for ua in user_answers}
+    user_answer_ids = [ua.id for ua in user_answers]
 
-        belbin_scores_by_answer_id = {
-            uba.answer_id: uba.score for uba in belbin_user_answers
-        }
-        question_id_by_user_answer_id = {ua.id: ua.question_id for ua in user_answers}
+    # Получаем UserAnswerItem записи
+    user_answer_items = db.query(UserAnswerItem).filter(
+        UserAnswerItem.user_answer_id.in_(user_answer_ids)
+    ).all()
 
-        for item in user_answer_items:
-            qid = question_id_by_user_answer_id.get(item.user_answer_id)
-            if qid:
-                answer_ids_by_question[qid].add(item.answer_id)
+    # Сопоставляем question_id с выбранными answer_id
+    question_id_by_user_answer_id = {ua.id: ua.question_id for ua in user_answers}
+    answer_ids_by_question = defaultdict(set)
+    
+    for item in user_answer_items:
+        qid = question_id_by_user_answer_id.get(item.user_answer_id)
+        if qid is not None:
+            answer_ids_by_question[qid].add(item.answer_id)
 
-        # Формируем обычные вопросы
-        safe_questions = []
-        for q in test.questions:
-            safe_answers = []
-            ua = user_answers_by_qid.get(q.id)
-            selected_answer_ids = answer_ids_by_question.get(q.id, set())
-            if q.question_type == "text_answer" and ua and ua.text_response:
-                safe_answers.append(SafeAnswer(
-                    id=None,
-                    question_id=q.id,
-                    text=ua.text_response,
-                    image=None,
-                    is_user_answer=True
-                ))
-            else:
-                for ans in q.answers:
-                    safe_answers.append(SafeAnswer(
-                        id=ans.id,
-                        question_id=ans.question_id,
-                        text="" if q.question_type == "text_answer" else ans.text,
-                        image=ans.image,
-                        is_user_answer=(ans.id in selected_answer_ids)
-                    ))
+    return user_answers_by_qid, answer_ids_by_question
 
-        
-
-            safe_questions.append(SafeQuestion(
-                id=q.id,
-                text=q.text,
-                question_type=q.question_type,
-                order=q.order,
-                test_id=q.test_id,
-                image=q.image,
-                answers=safe_answers
-            ))
-
-        # Формируем белбин-вопросы
-        safe_belbin_questions = []
-        for bq in test.belbin_questions:
-            safe_belbin_answers = [
-                SafeBelbinAnswer(
-                    id=ans.id,
-                    question_id=ans.question_id,
-                    text=ans.text,
-                    user_score=belbin_scores_by_answer_id.get(ans.id)
-                )
-                for ans in bq.answers
-            ]
-            safe_belbin_questions.append(SafeBelbinQuestion(
-                id=bq.id,
-                text=bq.text,
-                block_number=bq.block_number,
-                order=bq.order,
-                test_id=bq.test_id,
-                answers=safe_belbin_answers
-            ))
-
-        # Статус
-        result = db.query(model.TestResult).filter(
-            model.TestResult.test_id == test.id,
-            model.TestResult.employee_id == user.id
-        ).first()
-
-        if test.end_date and test.end_date < now:
-            status = "expired"
-        elif result and result.completed_at:
-            status = "completed"
-        elif result and result.started_at:
-            status = "in_progress"
-        else:
-            status = "not_started"
-
-        # Финальная сборка схемы
-        result_schemas.append(SafeTest(
-            id=test.id,
-            title=test.title,
-            description=test.description,
-            is_active=test.is_active,
-            created_at=test.created_at,
-            updated_at=test.updated_at,
-            end_date=test.end_date,
-            status=status,
-            questions=safe_questions,
-            belbin_questions=safe_belbin_questions,
-            time_limit_minutes=test.time_limit_minutes
-        ))
-
-    return result_schemas
 
 
 def change_test_status(db: Session, test_id: int, test_status: schema.TestStatusUpdate, user_id: str):
@@ -728,46 +951,6 @@ def get_completed_tests_for_employee(db: Session, user_id: str):
     )
 
 
-def get_assigned_tests_with_answers(db: Session, user_id: str) -> List[TestWithAnswersSchema]:
-    
-    employee = get_current_user(db, user_id)
-    tests = db.query(Test).join(Test.assigned_to).filter(Employee.id == employee.id).all()
-    result = []
-    
-    for test in tests:
-        completed = False
-        completed_at = None
-        answers = []
-        
-     
-        # Проверка, завершён ли тест
-        test_result = db.query(TestResult).filter(TestResult.test_id == test.id, TestResult.employee_id == employee.id).first()
-        if test_result and test_result.is_completed:
-            completed = True
-            completed_at = test_result.completed_at
-
-        # Ответы пользователя
-        user_answers = db.query(UserAnswer).filter(UserAnswer.test_id == test.id, UserAnswer.employee_id == employee.id).all()
-        for user_answer in user_answers:
-            print(user_answer)
-            ans = UserAnswerSchema.from_orm(user_answer)
-            if (user_answer.question_type == "text_answer"):
-                ans.text_response = ans.text_response
-            answers.append(ans)
-
-        result.append(TestWithAnswersSchema(
-            id=test.id,
-            title=test.title,
-            description=test.description,
-            is_active=test.is_active,
-            status=test.status,
-            end_date=test.end_date,
-            completed=completed,
-            completed_at=completed_at,
-            answers=answers
-        ))
-
-    return result
 def create_user_answer(db: Session, user_answer: UserAnswerCreate, user_id: str):
     employee = get_current_user(db, user_id)
 
@@ -891,7 +1074,7 @@ def create_user_answer(db: Session, user_answer: UserAnswerCreate, user_id: str)
 
 
 
-def complete_test(db: Session, user_id: int, test_id: int):
+def complete_test(db: Session, user_id: str, test_id: int):
     employee = get_current_user(db, user_id)
 
     test_result = db.query(TestResult).filter(
@@ -907,6 +1090,7 @@ def complete_test(db: Session, user_id: int, test_id: int):
 
     test_result.is_completed = True
     test_result.completed_at = datetime.now(timezone.utc)
+    
     db.commit()
     db.refresh(test_result)
 
@@ -1000,23 +1184,33 @@ def get_test_results_with_employee(db: Session, test_id: int, user_id: int):
         select(TestResult)
         .join(TestResult.test)
         .options(
-    joinedload(TestResult.employee)
-        .joinedload(Employee.position)
-        .joinedload(Position.belbin_requirements)
-        .joinedload(BelbinPositionRequirement.role),
+            joinedload(TestResult.employee)
+                .joinedload(Employee.position)
+                .joinedload(Position.belbin_requirements)
+                .joinedload(BelbinPositionRequirement.role),
 
-    joinedload(TestResult.belbin_results)
-        .joinedload(BelbinTestResult.role),
-)
+            joinedload(TestResult.belbin_results)
+                .joinedload(BelbinTestResult.role),
+
+            joinedload(TestResult.test)
+        )
         .where(
             TestResult.test_id == test_id,
-            Test.created_by == employee.id,
-            TestResult.is_completed == True
+            Test.created_by == employee.id
         )
     )
-    results = db.execute(stmt).unique().scalars().all()
-    return [TestResultSchema.model_validate(result) for result in results]
 
+    results = db.execute(stmt).unique().scalars().all()
+
+    # Завершаем просроченные тесты
+    auto_complete_expired_tests(results, db)
+
+    # Возвращаем только завершённые
+    for r in results:
+        r.time_limit_minutes = r.test.time_limit_minutes
+
+    # Валидация и возврат
+    return [TestResultSchema.model_validate(r) for r in results if r.is_completed]
 
 
 def remove_test_assignments(db: Session, assignment: TestAssignmentCreate):

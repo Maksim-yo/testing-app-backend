@@ -206,6 +206,7 @@ class TestResultSchema(BaseModel):
     score: Optional[int]
     max_score: Optional[int]
     percent: Optional[float]
+    time_limit_minutes: Optional[int]
 
     employee: Optional[Employee] = None
     belbin_results: List[BelbinTestResult] = []

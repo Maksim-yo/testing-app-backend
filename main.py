@@ -317,7 +317,7 @@ def create_employees_clerk_batch(
 @app.delete("/tests/{test_id}/employees/{employee_id}/reset")
 def reset_test(test_id: int, employee_id: int, db: Session = Depends(get_db)):
     try:
-        reset_test_for_employee(db, test_id, employee_id)
+        crud.reset_test_for_employee(db, test_id, employee_id)
         return {"message": "Test reset successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -463,7 +463,7 @@ def unassign_tests(
 
 
 @app.put("/tests/{test_id}", status_code=status.HTTP_200_OK)
-def update_test(test_id:int, test: test_schemas.TestCreate, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
+def update_test(test_id:int, test: test_schemas.Test, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
     return crud.update_test(db, test_id, test, current_user.user_id)
 
 @app.get("/tests/{test_id}/result", status_code=status.HTTP_200_OK)
@@ -585,7 +585,7 @@ def change_test_status(test_id: int, test_status: schemas.TestStatusUpdate, db: 
 @app.post("/test/complete/{test_id}")
 def complete_test(test_id: int, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
     test_result = crud.complete_test(db, current_user.user_id, test_id)
-    return {"message": "Test completed", "test_result": test_result}
+    return {"message": "Test completed", "test_result": test_result}    
 
 @app.post("/test/start/{test_id}")
 def start_test(test_id: int, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
