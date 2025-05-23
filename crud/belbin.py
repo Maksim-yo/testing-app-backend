@@ -152,10 +152,13 @@ def get_belbin_roles(db: Session, user_id: str):
     return roles
 
 
-def update_belbin_role(db: Session, role_id: int, role_data: schema.BelbinRoleCreate, user_id: str):
+def update_belbin_role(db: Session, role_data: schema.BelbinRole, user_id: str):
+    print('test')
     user = check_user_permissions(db, user_id, True)
+    print(user_id)
+    role = db.query(model.BelbinRole).filter(model.BelbinRole.id == role_data.id).join(BelbinRole.created_by).filter(BelbinRole.created_by_id == user.id).first()
+    print(role)
 
-    role = db.query(model.BelbinRole).filter(model.BelbinRole.id == role_id).join(BelbinRole.created_by).filter(Employee.created_by_id == user.id).first()
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
     role.name = role_data.name
@@ -168,7 +171,7 @@ def update_belbin_role(db: Session, role_id: int, role_data: schema.BelbinRoleCr
 def delete_belbin_role(db: Session, role_id: int, user_id: str):
     user = check_user_permissions(db, user_id, True)
 
-    role = db.query(model.BelbinRole).filter(model.BelbinRole.id == role_id).join(BelbinRole.created_by).filter(Employee.created_by_id == user.id).first()
+    role = db.query(model.BelbinRole).filter(model.BelbinRole.id == role_id).join(BelbinRole.created_by).filter(BelbinRole.created_by_id == user.id).first()
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
     db.delete(role)

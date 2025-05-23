@@ -36,8 +36,8 @@ app.add_middleware(
     allow_origins=[app_host_url],  # вместо '*'
     allow_credentials=True,                  # разрешить куки и Authorization
 
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],  # Явное указание
-    allow_headers=["Authorization", "Content-Type", "Accept"],  # Важно включить Authorization
+    allow_methods=["*"],  # Явное указание
+allow_headers=["*"] ,
     expose_headers=["*"],  # Для доступа к кастомным заголовкам
     max_age=600,  # Время кэширования preflight
 
@@ -314,36 +314,49 @@ def create_employees_clerk_batch(
 #         raise HTTPException(status_code=400, detail="Неподдерживаемый тип создания аккаунта")
 
 
-        
+@app.delete("/tests/{test_id}/employees/{employee_id}/reset")
+def reset_test(test_id: int, employee_id: int, db: Session = Depends(get_db)):
+    try:
+        reset_test_for_employee(db, test_id, employee_id)
+        return {"message": "Test reset successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/auth/create_user/", status_code=status.HTTP_200_OK)
 async def clerk_user_created(request: Request, db: Session = Depends(get_db)):
-    payload = await request.json()
+    try:
 
-    clerk_id = payload.get("id")
-    email = payload.get("email")
-    first_name = payload.get("first_name")
-    last_name = payload.get("last_name")
-    is_admin = payload.get("is_admin")
-    if not clerk_id or not email:
-        return {"status": "invalid payload"}
-    # Проверим, существует ли уже такой пользователь
-    existing_user = db.query(models.Employee).filter_by(clerk_id=clerk_id).first()
-    if existing_user:
-        return {"status": "user already exists"}
+        payload = await request.json()
 
-    # Создаём нового пользователя
-    new_user = models.Employee(
-        clerk_id=clerk_id,
-        email=email,
-        first_name=first_name,
-        is_admin=is_admin
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+        clerk_id = payload.get("id")
+        email = payload.get("email")
+        first_name = payload.get("first_name")
+        last_name = payload.get("last_name")
+        is_admin = payload.get("is_admin")
+        if not clerk_id or not email:
+            return {"status": "invalid payload"}
+        # Проверим, существует ли уже такой пользователь
+        existing_user = db.query(models.Employee).filter_by(clerk_id=clerk_id).first()
+        if existing_user:
+            return {"status": "user already exists"}
 
-    return {"status": "created", "user_id": new_user.id}
+        # Создаём нового пользователя
+        new_user = models.Employee(
+            clerk_id=clerk_id,
+            email=email,
+            first_name=first_name,
+            is_admin=is_admin
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        return {"status": "created", "user_id": new_user.id}
+
+    except Exception as e:
+        # Удалим Clerk пользователя
+        await delete_clerk_user(payload.get("id"))
+        raise HTTPException(status_code=500, detail="Ошибка при создании пользователя")
+
 
 @app.get("/me/profile/",  status_code=status.HTTP_200_OK)
 def get_profile(db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
@@ -512,14 +525,17 @@ def create_belbin_role(role: schemas.BelbinRoleCreate, db: Session = Depends(get
     return crud.create_belbin_role(db, role, current_user.user_id)
 
 
-@app.get("/belbin-roles", response_model=list[schemas.BelbinRole])
+@app.get("/belbin-roles/", response_model=list[schemas.BelbinRole])
 def get_belbin_roles(db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
+    print("current_user:", current_user)
+    print("user_id:", current_user.user_id)
+
     return crud.get_belbin_roles(db, current_user.user_id)
 
 
-@app.put("/belbin-roles/{role_id}", response_model=schemas.BelbinRole)
-def update_belbin_role(role_id: int, role: schemas.BelbinRoleCreate, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
-    return crud.update_belbin_role(db, role_id, role, current_user.user_id)
+@app.put("/belbin-roles/", response_model=schemas.BelbinRole)
+def update_belbin_role(role: schemas.BelbinRole, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
+    return crud.update_belbin_role(db, role, current_user.user_id)
 
 @app.delete("/belbin-roles/{role_id}")
 def delete_belbin_role(role_id: int, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):

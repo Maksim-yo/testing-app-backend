@@ -105,6 +105,45 @@ def calculate_test_result(db: Session, test_id: int, employee_id: int):
     calculate_test_score(db, test_id, employee_id)
     calculate_and_save_belbin_results(db, test_id, employee_id)
     return
+
+def reset_test_for_employee(db: Session, test_id: int, employee_id: int):
+    # Удалить BelbinTestResult
+
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    test = db.query(Test).filter(Test.id == test_id).first()
+
+    if not employee or not test:
+        raise ValueError("Тест или сотрудник не найдены")
+
+    if employee not in test.assigned_to:
+        raise ValueError("Тест не назначен данному сотруднику")
+
+
+    belbin_results = db.query(BelbinTestResult).join(TestResult).filter(
+        TestResult.test_id == test_id,
+        TestResult.employee_id == employee_id
+    ).all()
+    for item in belbin_results:
+        db.delete(item)
+
+    # Удалить UserAnswerItem, связанные через UserAnswer
+    user_answers = db.query(UserAnswer).filter_by(test_id=test_id, employee_id=employee_id).all()
+    user_answer_ids = [ua.id for ua in user_answers]
+
+    if user_answer_ids:
+        db.query(UserAnswerItem).filter(UserAnswerItem.user_answer_id.in_(user_answer_ids)).delete(synchronize_session=False)
+
+    # Удалить UserAnswer
+    db.query(UserAnswer).filter_by(test_id=test_id, employee_id=employee_id).delete(synchronize_session=False)
+
+    # Удалить UserBelbinAnswer
+    db.query(UserBelbinAnswer).filter_by(test_id=test_id, employee_id=employee_id).delete(synchronize_session=False)
+
+    # Удалить TestResult
+    db.query(TestResult).filter_by(test_id=test_id, employee_id=employee_id).delete(synchronize_session=False)
+
+    db.commit()
+
 def calculate_test_score(db: Session, test_id: int, employee_id: int) -> int:
     score = 0
     max_score = 0
