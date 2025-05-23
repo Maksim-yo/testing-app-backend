@@ -18,7 +18,7 @@ class TestSettings(Base):
     min_questions = Column(Integer, nullable=False)
     belbin_block = Column(Integer, nullable=False)
     belbin_questions_in_block = Column(Integer, nullable=False)
-    
+    has_time_limit = Column(Boolean, nullable=False)
     tests = relationship("Test", back_populates="test_settings", cascade="all, delete")  
 
 class Test(Base):

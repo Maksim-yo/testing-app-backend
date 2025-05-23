@@ -57,6 +57,7 @@ class TestSettingsBase(BaseModel):
     min_questions: int
     belbin_block: int
     belbin_questions_in_block: int
+    has_time_limit: bool
     
 class TestSettingsCreate(TestSettingsBase):
     pass

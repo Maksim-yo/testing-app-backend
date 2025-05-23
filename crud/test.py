@@ -543,7 +543,8 @@ def update_test(db: Session, test_id: int, test_update: schema.Test, user_id: st
     
     # Обновление основных полей теста
     update_test_fields(db_test, update_data)
-    
+    if test_update.test_settings.has_time_limit == False:
+        db_test.time_limit_minutes = None
     # Фиксация изменений
     db.commit()
     db.refresh(db_test)
