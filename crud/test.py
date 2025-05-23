@@ -5,13 +5,113 @@ from models import Employee, Test, Question, BelbinQuestion, BelbinAnswer, TestS
 from fastapi import HTTPException, status
 from schemas.test import Test as TestSchema, TestWithAnswersSchema, UserAnswer as UserAnswerSchema, UserAnswerCreate, TestAssignmentCreate, SafeTest, SafeAnswer, SafeBelbinAnswer, SafeBelbinQuestion, SafeQuestion, TestResultSchema
 from datetime import datetime, timezone, timedelta
-from typing import List
+from typing import List, Set
 from sqlalchemy import insert, delete, and_
 from sqlalchemy.exc import IntegrityError
 import json
 from sqlalchemy import select
 
 from collections import defaultdict
+
+def answers_changed(old_answers, new_answers, belbin=False):
+    if len(old_answers) != len(new_answers):
+        return True
+    # Сравниваем по id, text и order (если есть)
+    old_sorted = sorted(old_answers, key=lambda x: x.get("id") or x.get("text"))
+    new_sorted = sorted(new_answers, key=lambda x: x.get("id") or x.get("text"))
+
+    for old_a, new_a in zip(old_sorted, new_sorted):
+        if (
+            old_a.get("text") != new_a.get("text") 
+        ):
+            return True
+        if (old_a.get("is_correct") != new_a.get("is_correct")):
+            return True
+    return False
+
+def get_changed_question_ids(db_test, update_data) -> tuple[Set[int], Set[int], Set[int], Set[int]]:
+    old_questions = {q.id: q for q in db_test.questions}
+    old_belbin_questions = {q.id: q for q in db_test.belbin_questions}
+
+    new_questions = update_data.get("questions", [])
+    new_belbin_questions = update_data.get("belbin_questions", [])
+
+    changed_question_ids = set()
+    changed_belbin_question_ids = set()
+
+    new_q_ids = set()
+    for q_data in new_questions:
+        q_id = q_data.get("id")
+        if q_id:
+            new_q_ids.add(q_id)
+            old_q = old_questions.get(q_id)
+            if old_q:
+                is_answers_changed = answers_changed(
+                    [dict(text=a.text, is_correct=a.is_correct, id=a.id) for a in old_q.answers],
+                    q_data.get("answers", [])
+                )
+                if (q_data["text"] != old_q.text ) or is_answers_changed:
+                    changed_question_ids.add(q_id)
+
+    removed_q_ids = set(old_questions.keys()) - new_q_ids
+    changed_question_ids.update(removed_q_ids)
+
+    new_bq_ids = set()
+    for bq_data in new_belbin_questions:
+        bq_id = bq_data.get("id")
+        if bq_id:
+            new_bq_ids.add(bq_id)
+            old_bq = old_belbin_questions.get(bq_id)
+            if old_bq:
+                is_answers_changed = answers_changed(
+                    [dict(text=a.text, id=a.id) for a in old_bq.answers],
+                    bq_data.get("answers", [])
+                )
+                if (
+                bq_data["text"] != old_bq.text) or is_answers_changed:
+                    changed_belbin_question_ids.add(bq_id)
+    removed_bq_ids = set(old_belbin_questions.keys()) - new_bq_ids
+    changed_belbin_question_ids.update(removed_bq_ids)
+
+    return changed_question_ids, changed_belbin_question_ids, removed_q_ids, removed_bq_ids
+
+def remove_changed_answers(db: Session, test_id: int, changed_q_ids: Set[int], changed_bq_ids: Set[int]):
+    if changed_q_ids:
+        ua_ids = db.query(UserAnswer.id).filter(
+            UserAnswer.test_id == test_id,
+            UserAnswer.question_id.in_(changed_q_ids)
+        )
+        db.query(UserAnswerItem).filter(
+            UserAnswerItem.user_answer_id.in_(ua_ids)
+        ).delete(synchronize_session=False)
+
+        db.query(UserAnswer).filter(
+            UserAnswer.test_id == test_id,
+            UserAnswer.question_id.in_(changed_q_ids)
+        ).delete(synchronize_session=False)
+
+    if changed_bq_ids:
+        db.query(UserBelbinAnswer).filter(
+            UserBelbinAnswer.test_id == test_id,
+            UserBelbinAnswer.question_id.in_(changed_bq_ids)
+        ).delete(synchronize_session=False)
+
+def handle_test_settings(db: Session, db_test, ts_data):
+    if ts_data:
+        if isinstance(ts_data, dict):
+            if db_test.test_settings:
+                for field, value in ts_data.items():
+                    setattr(db_test.test_settings, field, value)
+            else:
+                db_settings = TestSettings(**ts_data)
+                db.add(db_settings)
+                db.commit()
+                db.refresh(db_settings)
+                db_test.test_settings_id = db_settings.id
+        else:
+            raise ValueError("test_settings должен быть dict")
+
+
 def check_user_permissions(db: Session, user_id: str, is_admin: bool = False):
         employee = (
             db.query(Employee)
@@ -298,28 +398,27 @@ def update_test(db: Session, test_id: int, test_update: schema.TestCreate, user_
 
     update_data = test_update.model_dump(exclude_unset=True)
 
-    # Обработка test_settings (если есть)
-    ts_data = update_data.pop("test_settings", None)
-    if ts_data:
-        if isinstance(ts_data, dict):
-            if db_test.test_settings:
-                for field, value in ts_data.items():
-                    setattr(db_test.test_settings, field, value)
-            else:
-                db_settings = TestSettings(**ts_data)
-                db.add(db_settings)
-                db.commit()
-                db.refresh(db_settings)
-                db_test.test_settings_id = db_settings.id
-        else:
-            raise ValueError("test_settings должен быть dict")
+    changed_question_ids, changed_belbin_question_ids, removed_q_ids, removed_bq_ids = get_changed_question_ids(
+        db_test, update_data
+    )
 
-    # Обновление обычных полей Test, кроме вопросов
+    remove_changed_answers(
+        db, test_id,
+        changed_question_ids,
+        changed_belbin_question_ids
+    )
+
+    if removed_q_ids or removed_bq_ids or any(q.get("id") is None for q in update_data.get("questions", []) + update_data.get("belbin_questions", [])):
+        db.query(model.TestResult).filter(model.TestResult.test_id == test_id).delete(synchronize_session=False)
+
+    handle_test_settings(db, db_test, update_data.pop("test_settings", None))
+
     for field, value in update_data.items():
         if field in ["questions", "belbin_questions"]:
             continue
         setattr(db_test, field, value)
     db_test.updated_at = datetime.now(timezone.utc)
+
     # Обновление обычных вопросов
     if "questions" in update_data:
         db_test.questions.clear()
@@ -342,7 +441,7 @@ def update_test(db: Session, test_id: int, test_update: schema.TestCreate, user_
                 order=bq_data["order"]
             )
             for ba_data in answers_data:
-                belbin_answer = BelbinAnswer(
+                belbin_answer = model.BelbinAnswer(
                     text=ba_data["text"],
                     role_id=ba_data["role_id"]
                 )
