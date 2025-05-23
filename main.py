@@ -532,6 +532,10 @@ def get_belbin_roles(db: Session = Depends(get_db), current_user: UserData = Dep
 
     return crud.get_belbin_roles(db, current_user.user_id)
 
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
+
 
 @app.put("/belbin-roles/", response_model=schemas.BelbinRole)
 def update_belbin_role(role: schemas.BelbinRole, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
