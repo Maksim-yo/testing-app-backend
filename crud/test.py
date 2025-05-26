@@ -1260,6 +1260,7 @@ def start_test(db: Session, user_id: str, test_id: int):
             db.refresh(test_result)
             status = "in_progress"
 
+    started_at = existing_result.started_at if existing_result else now
     user_answers_data = get_user_answers_data(db, test.id, employee.id)
     belbin_answers_data = get_belbin_answers_data(db, test.id, employee.id)
 
@@ -1268,13 +1269,14 @@ def start_test(db: Session, user_id: str, test_id: int):
     safe_belbin_questions = build_safe_belbin_questions(test.belbin_questions, belbin_answers_data)
 
     # Возвращаем финальную схему
-    return create_safe_test_schema(
+    test_result = create_safe_test_schema(
         test,
         status,
         safe_questions,
         safe_belbin_questions,
     )
-
+    test_result.started_at = started_at
+    return test_result
 
 def assign_test_to_employees(db: Session, assignment: TestAssignmentCreate):
     values = [
