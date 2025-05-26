@@ -520,7 +520,7 @@ def get_belbin_test_results(test_id: int, db: Session = Depends(get_db), current
         raise HTTPException(status_code=404, detail="Results not found")
     return results
 
-@app.post("/belbin-roles", response_model=schemas.BelbinRole)
+@app.post("/belbin-roles/", response_model=schemas.BelbinRole)
 def create_belbin_role(role: schemas.BelbinRoleCreate, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
     return crud.create_belbin_role(db, role, current_user.user_id)
 

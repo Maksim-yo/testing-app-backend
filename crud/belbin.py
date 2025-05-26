@@ -138,7 +138,12 @@ def update_belbin_position(db: Session, data: schemas.BelbinPositionRequirement,
 
 def create_belbin_role(db: Session, role: schema.BelbinRoleCreate, user_id: str) -> model.BelbinRole:
     user = check_user_permissions(db, user_id, True)
-    
+
+    existing = db.query(model.BelbinRole).filter_by(name=role.name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Роль с именем '{role.name}' уже существует")
+
+
     db_role = model.BelbinRole(name=role.name, description=role.description, created_by_id=user.id)
     db.add(db_role)
     db.commit()
@@ -153,14 +158,33 @@ def get_belbin_roles(db: Session, user_id: str):
 
 
 def update_belbin_role(db: Session, role_data: schema.BelbinRole, user_id: str):
-    print('test')
     user = check_user_permissions(db, user_id, True)
-    print(user_id)
-    role = db.query(model.BelbinRole).filter(model.BelbinRole.id == role_data.id).join(BelbinRole.created_by).filter(BelbinRole.created_by_id == user.id).first()
-    print(role)
+
+    role = (
+        db.query(model.BelbinRole)
+        .filter(model.BelbinRole.id == role_data.id)
+        .join(model.BelbinRole.created_by)
+        .filter(model.BelbinRole.created_by_id == user.id)
+        .first()
+    )
 
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
+
+    # Проверяем, есть ли другая роль с таким же именем
+    existing = (
+        db.query(model.BelbinRole)
+        .filter(model.BelbinRole.name == role_data.name)
+        .filter(model.BelbinRole.id != role_data.id)  # НЕ считаем текущую роль
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Роль с именем '{role_data.name}' уже существует"
+        )
+
+    # Если проверки прошли, обновляем
     role.name = role_data.name
     role.description = role_data.description
     db.commit()
@@ -174,6 +198,7 @@ def delete_belbin_role(db: Session, role_id: int, user_id: str):
     role = db.query(model.BelbinRole).filter(model.BelbinRole.id == role_id).join(BelbinRole.created_by).filter(BelbinRole.created_by_id == user.id).first()
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
+  
     db.delete(role)
     db.commit()
     return role
