@@ -28,7 +28,6 @@ class EmployeeBase(BaseModel):
 class EmployeeMinimalBase(BaseModel):
     email: str
     is_admin: bool = False
-    position_id: int
 
 class EmployeeCreateMinimal(EmployeeMinimalBase):
     pass

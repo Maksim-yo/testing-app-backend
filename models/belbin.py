@@ -23,7 +23,7 @@ class BelbinQuestion(Base):
     text = Column(String, index=True, nullable=False)   
     block_number = Column(Integer)
     order = Column(Integer, nullable=False)
-    test_id = Column(Integer, ForeignKey("tests.id"))  
+    test_id = Column(Integer, ForeignKey("tests.id", ondelete="CASCADE"))  
 
     test = relationship("Test", back_populates="belbin_questions")  
     answers = relationship("BelbinAnswer", back_populates="question")
@@ -35,9 +35,9 @@ class BelbinAnswer(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     # test_id = Column(Integer, ForeignKey("test.id"))
-    question_id = Column(Integer, ForeignKey("belbin_questions.id"))
+    question_id = Column(Integer, ForeignKey("belbin_questions.id", ondelete="CASCADE"))
     score = Column(Integer, nullable=True)  # 0-10 баллов
-    role_id = Column(Integer, ForeignKey("belbin_roles.id"))
+    role_id = Column(Integer, ForeignKey("belbin_roles.id", ondelete="CASCADE"))
     text = Column(String, nullable=False)  
 
     role = relationship("BelbinRole", back_populates="questions")
@@ -50,8 +50,8 @@ class BelbinTestResult(Base):
     __tablename__ = "belbin_test_results"
 
     id = Column(Integer, primary_key=True, index=True)
-    test_id = Column(Integer, ForeignKey("test_results.id")) 
-    role_id = Column(Integer, ForeignKey("belbin_roles.id"))
+    test_id = Column(Integer, ForeignKey("test_results.id", ondelete="CASCADE")) 
+    role_id = Column(Integer, ForeignKey("belbin_roles.id", ondelete="CASCADE"))
     total_score = Column(Float)
     # is_required = Column(Boolean)
     # meets_requirement = Column(Boolean)
@@ -64,8 +64,8 @@ class BelbinPositionRequirement(Base):
     __tablename__ = "belbin_position_requirements"
 
     id = Column(Integer, primary_key=True, index=True)
-    position_id = Column(Integer, ForeignKey("positions.id"))
-    role_id = Column(Integer, ForeignKey("belbin_roles.id"))
+    position_id = Column(Integer, ForeignKey("positions.id", ondelete="CASCADE"))
+    role_id = Column(Integer, ForeignKey("belbin_roles.id", ondelete="CASCADE"))
     min_score = Column(Integer)
     is_key = Column(Boolean)  # Является ли роль ключевой для должности
 

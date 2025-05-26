@@ -9,6 +9,34 @@ from models.test import test_assignments
 from sqlalchemy.exc import IntegrityError
 from psycopg2.errors import UniqueViolation
 
+def create_account(db:Session, employee: schema.EmployeeMinimal):
+    try:
+        existing_user = db.query(model.Employee).filter_by(clerk_id=employee.clerk_id).first()
+        if existing_user:
+            raise HTTPException(status_code=404, detail="user already exists.")
+
+        # Создаём нового пользователя
+        new_user = model.Employee(
+            **employee.dict()
+        )
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        return new_user
+    except IntegrityError as e:
+            # Проверяем, что причина ошибки - UniqueViolation (дубликат по уникальному ключу)
+            if isinstance(e.orig, UniqueViolation):
+                if 'employees_email_key' in str(e.orig):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Пользователь с таким email уже существует."
+                    )
+            # Если ошибка не обрабатывается, пробрасываем дальше с обобщенным сообщением
+            raise HTTPException(status_code=500, detail=f"Ошибка создания сотрудника: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка создания сотрудника: {str(e)}")
+
+
 def get_employee(db: Session, employee_id: int, user_id: str):
     user = get_current_user(db, user_id)
     try:

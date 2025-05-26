@@ -195,10 +195,21 @@ def update_belbin_role(db: Session, role_data: schema.BelbinRole, user_id: str):
 def delete_belbin_role(db: Session, role_id: int, user_id: str):
     user = check_user_permissions(db, user_id, True)
 
-    role = db.query(model.BelbinRole).filter(model.BelbinRole.id == role_id).join(BelbinRole.created_by).filter(BelbinRole.created_by_id == user.id).first()
+    role_exists_in_answer = (
+        db.query(model.BelbinAnswer)
+        .filter(model.BelbinAnswer.role_id == role_id)
+        .exists()
+    )
+    exists = db.query(role_exists_in_answer).scalar()
+
+    role = db.query(model.BelbinRole).filter(
+            model.BelbinRole.id == role_id,
+            model.BelbinRole.created_by_id == user.id).first()
+        
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
-  
+    if exists:
+        raise HTTPException(status_code=400, detail="Cannot delete role with answers")
     db.delete(role)
     db.commit()
     return role

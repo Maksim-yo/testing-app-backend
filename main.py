@@ -231,7 +231,7 @@ def create_employees_clerk_batch(
 
     return {"results": results, "errors": errors}
 
-    
+
 # @router.post("/employees/", status_code=status.HTTP_201_CREATED)
 # def create_employee(
 #     employee: schemas.EmployeeCreateWithAccount = Body(...),
@@ -323,49 +323,59 @@ def reset_test(test_id: int, employee_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/auth/create_user/", status_code=status.HTTP_200_OK)
-async def clerk_user_created(request: Request, db: Session = Depends(get_db)):
+async def clerk_user_created(request: Request, employee: schemas.EmployeeMinimal, db: Session = Depends(get_db)):
     try:
 
-        payload = await request.json()
-
-        clerk_id = payload.get("id")
-        email = payload.get("email")
-        first_name = payload.get("first_name")
-        last_name = payload.get("last_name")
-        is_admin = payload.get("is_admin")
-        if not clerk_id or not email:
-            return {"status": "invalid payload"}
-        # Проверим, существует ли уже такой пользователь
-        existing_user = db.query(models.Employee).filter_by(clerk_id=clerk_id).first()
-        if existing_user:
-            return {"status": "user already exists"}
-
-        # Создаём нового пользователя
-        new_user = models.Employee(
-            clerk_id=clerk_id,
-            email=email,
-            first_name=first_name,
-            is_admin=is_admin
-        )
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
+        new_user = crud.create_account(db, employee)
         return {"status": "created", "user_id": new_user.id}
 
     except Exception as e:
         # Удалим Clerk пользователя
-        await delete_clerk_user(payload.get("id"))
-        raise HTTPException(status_code=500, detail="Ошибка при создании пользователя")
+        delete_clerk_user(employee.clerk_id)
+        raise HTTPException(status_code=500, detail=f"Ошибка создания сотрудника: {e}")
 
 
 @app.get("/me/profile/",  status_code=status.HTTP_200_OK)
 def get_profile(db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
     return schemas.Employee.model_validate(crud.get_current_user(db, current_user.user_id))
 
-@app.delete("/me/profile/",  status_code=status.HTTP_200_OK)
+@app.delete("/me/profile/", status_code=status.HTTP_200_OK)
 def delete_profile(db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
-    delete_clerk_user(current_user.user_id) 
+    try:
+        # Удаляем пользователя из Clerk
+        delete_clerk_user(current_user.user_id)
+    except requests.exceptions.HTTPError as e:
+        # Ошибка от Clerk API
+        raise HTTPException(
+            status_code=502,
+            detail=f"Ошибка при удалении пользователя из Clerk: {str(e)}"
+        )
+    except requests.exceptions.RequestException as e:
+        # Проблемы с сетью/доступом к Clerk
+        raise HTTPException(
+            status_code=503,
+            detail=f"Сетевая ошибка при удалении пользователя из Clerk: {str(e)}"
+        )
+    except ValueError as e:
+        # Неверный формат clerk_id
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except Exception as e:
+        # Прочие ошибки
+        raise HTTPException(
+            status_code=500,
+            detail=f"Внутренняя ошибка сервера: {str(e)}"
+        )
+
+    # Если удаление в Clerk прошло успешно — удаляем пользователя из локальной БД
     return crud.delete_current_user(db, current_user.user_id)
+
+# Todo add admin check
+@app.delete("/clerk/delete/{clerk_id}/",  status_code=status.HTTP_200_OK)
+def delete_user_clerk(clerk_id: str, db: Session = Depends(get_db)):
+    return delete_clerk_user(clerk_id)
 
 @app.post("/me/profile/",  status_code=status.HTTP_200_OK)
 def update_profile(data: schemas.EmployeeCreate = Depends(schemas.EmployeeCreate.as_form), photo: UploadFile = File(None),  db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
@@ -388,14 +398,16 @@ def update_profile(data: schemas.EmployeeCreate = Depends(schemas.EmployeeCreate
     
 @app.delete("/employees/{employee_id}/", status_code=status.HTTP_200_OK)
 def delete_employee(
-    employee_id: str,
+    employee_id: int,
     db: Session = Depends(get_db),
     current_user: UserData = Depends(get_current_user)
 ):
     db_employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
-    response = crud.delete_employee(db=db, employee_id=employee_id, user_id=current_user.user_id)
+    if not db_employee:
+        raise HTTPException(status_code=404, detail="Employee not found.")
     if db_employee.clerk_id != None:
         response = delete_clerk_user(db_employee.clerk_id)
+    response = crud.delete_employee(db=db, employee_id=employee_id, user_id=current_user.user_id)
     return response
       
 
@@ -447,6 +459,10 @@ def get_tests(db: Session = Depends(get_db), current_user: UserData = Depends(ge
 def get_assigned_tests_for_employee( db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
     return crud.get_assigned_tests_for_employee(db, current_user.user_id)
 
+@app.get("/tests/assign/{test_id}", status_code=status.HTTP_200_OK)
+def get_assigned_test_for_employee(test_id: int, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
+    return crud.get_assigned_test_for_employee(db, current_user.user_id, test_id)
+
 @app.post("/tests/assign/", status_code=201)
 def assign_tests(
     assignment_data: test_schemas.TestAssignmentCreate,
@@ -463,7 +479,7 @@ def unassign_tests(
 
 
 @app.put("/tests/{test_id}", status_code=status.HTTP_200_OK)
-def update_test(test_id:int, test: test_schemas.Test, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
+def update_test(test_id:int, test: test_schemas.TestCreate, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
     return crud.update_test(db, test_id, test, current_user.user_id)
 
 @app.get("/tests/{test_id}/result", status_code=status.HTTP_200_OK)

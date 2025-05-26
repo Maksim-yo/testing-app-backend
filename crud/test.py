@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from collections import defaultdict
 
-
+# Need celery + redis 
 def auto_complete_expired_tests(results: Iterable[TestResult], db: Session, now: datetime | None = None) -> None:
     """Завершает тесты, если истекло отведенное время прохождения."""
     now = now or datetime.now(timezone.utc)
@@ -30,6 +30,10 @@ def auto_complete_expired_tests(results: Iterable[TestResult], db: Session, now:
                 # Нужно найти clerk_id пользователя, которому принадлежит результат
                 clerk_id = result.employee.clerk_id
                 complete_test(db, user_id=clerk_id, test_id=test.id)
+
+        if test.end_date and test.end_date < now:
+            clerk_id = result.employee.clerk_id
+            complete_test(db, user_id=clerk_id, test_id=test.id)
 
   
 def get_belbin_answers_data(db: Session, test_id: int, employee_id: int) -> Dict:
@@ -276,6 +280,7 @@ def create_test(db: Session, test: schema.TestCreate, user_id: str):
             min_questions=settings.min_questions,
             belbin_block=settings.belbin_block,
             belbin_questions_in_block=settings.belbin_questions_in_block,
+            has_time_limit=settings.has_time_limit
         )
         db.add(db_settings)
         db.commit()
@@ -528,7 +533,7 @@ def get_tests_by_position(db: Session, position_id: int, user_id: str):
         model.Test.is_active == True,
         model.Test.created_by == user_id
     ).all()
-def update_test(db: Session, test_id: int, test_update: schema.Test, user_id: str):
+def update_test(db: Session, test_id: int, test_update: schema.TestCreate, user_id: str):
     # Проверка прав и получение теста
     db_employee = check_user_permissions(db, user_id, True)
     db_test = get_test_for_update(db, test_id, db_employee.id)
@@ -598,12 +603,20 @@ def should_clear_test_results(update_data: dict, removed_q_ids: set, removed_bq_
 
 def update_test_fields(db_test: model.Test, update_data: dict):
     """Обновление основных полей теста."""
+
+    now = datetime.now(timezone.utc)
+
+    old_end_date = db_test.end_date
+    new_end_date = update_data.get("end_date")
+
     for field, value in update_data.items():
         if field in ["questions", "belbin_questions", "test_settings"]:
             continue
         setattr(db_test, field, value)
-    db_test.updated_at = datetime.now(timezone.utc)
+    db_test.updated_at = now
 
+    if new_end_date and new_end_date != old_end_date and new_end_date > now:
+        db_test.status = "draft"
 
 def update_regular_questions(db_test: model.Test, questions_data: list[dict]):
     """Обновление обычных вопросов теста."""
@@ -703,7 +716,7 @@ def update_existing_belbin_question(belbin_question: model.BelbinQuestion, bq_da
     belbin_question.answers.clear()
     for ba_data in answers_data:
         ba_data.pop("id", None)
-        belbin_question.answers.append(model.BelbinAnswer(**ba_data))
+        belbin_question.answers.append(BelbinAnswer(**ba_data))
 
 
 def create_new_belbin_question(bq_data: dict, answers_data: list[dict]) -> model.BelbinQuestion:
@@ -712,7 +725,7 @@ def create_new_belbin_question(bq_data: dict, answers_data: list[dict]) -> model
     belbin_question = model.BelbinQuestion(**bq_data)
     for ba_data in answers_data:
         ba_data.pop("id", None)
-        belbin_question.answers.append(model.BelbinAnswer(**ba_data))
+        belbin_question.answers.append(BelbinAnswer(**ba_data))
     return belbin_question
 
 
@@ -751,6 +764,34 @@ def get_assigned_tests_for_employee(db: Session, user_id: str) -> List[SafeTest]
         result_schemas.append(create_safe_test_schema(test, status, safe_questions, safe_belbin_questions))
 
     return result_schemas
+
+def get_assigned_test_for_employee(db: Session, user_id: str, test_id: int):
+    """Получить данные одного назначенного теста для сотрудника с информацией о статусе и ответах."""
+    now = datetime.now(timezone.utc)
+    user = get_current_user(db, user_id)
+    # Получаем тест по id и проверяем, что он назначен этому сотруднику
+    test = db.query(Test).filter(
+        Test.id == test_id,
+        Test.status != "draft",  # можно сразу исключить черновики
+        Test.assigned_users.any(id=user.id)  # или аналогичная проверка назначений
+    ).first()
+
+    if not test:
+        return None  # Тест не найден или не назначен
+
+    # Получаем данные о ответах пользователя
+    user_answers_data = get_user_answers_data(db, test.id, user.id)
+    belbin_answers_data = get_belbin_answers_data(db, test.id, user.id)
+
+    # Формируем вопросы с ответами
+    safe_questions = build_safe_questions(test.questions, user_answers_data)
+    safe_belbin_questions = build_safe_belbin_questions(test.belbin_questions, belbin_answers_data)
+
+    # Определяем статус теста
+    status = determine_test_status(db, test, user.id, now)
+
+    # Формируем и возвращаем схему
+    return create_safe_test_schema(test, status, safe_questions, safe_belbin_questions)
 
 def get_user_test_results(db: Session, user_id: str) -> List[TestResult]:
        return (
@@ -822,20 +863,41 @@ def get_user_answers_data(db: Session, test_id: int, employee_id: int) -> Tuple[
     return user_answers_by_qid, answer_ids_by_question
 
 
-
 def change_test_status(db: Session, test_id: int, test_status: schema.TestStatusUpdate, user_id: str):
     db_employee = check_user_permissions(db, user_id, True)
+
     db_test = db.query(model.Test).filter(
         model.Test.id == test_id,
         model.Test.created_by == db_employee.id
     ).first()
+
     if not db_test:
         return None
-    db_test.status = test_status.status
+
+    # Обработка изменения статуса
+    new_status = test_status.status
+
+    if new_status == "draft":
+        # Завершение теста для всех пользователей
+        test_results = db.query(TestResult).filter(
+            TestResult.test_id == test_id,
+            TestResult.is_completed == False
+        ).all()
+
+        for result in test_results:
+            complete_test(db, user_id=result.employee.clerk_id, test_id=test_id)
+
+    elif new_status == "active":
+        # Удаление всех результатов теста
+        db.query(TestResult).filter(
+            TestResult.test_id == test_id
+        ).delete(synchronize_session=False)
+
+    db_test.status = new_status
     db.commit()
     db.refresh(db_test)
-    return {"id": db_test.id, "status": db_test.status}
 
+    return {"id": db_test.id, "status": db_test.status}
 
 
 def delete_test(db: Session, test_id: int, user_id: str):
@@ -951,6 +1013,37 @@ def get_completed_tests_for_employee(db: Session, user_id: str):
         .all()
     )
 
+def validate_test_availability(db, test, employee):
+    
+    now = datetime.now(timezone.utc)
+
+    # 1. Проверка глобального срока доступности
+    if test.end_date and now > test.end_date:
+        raise HTTPException(status_code=400, detail="Срок действия теста истёк")
+
+    if test.status == "draft":
+        raise HTTPException(status_code=400, detail="Тест приостановлен")
+    # 2. Проверка индивидуального лимита времени
+    if test.time_limit_minutes:
+        test_result = db.query(TestResult).filter_by(
+            test_id=test.id,
+            employee_id=employee.id
+        ).first()
+
+        if not test_result:
+            raise HTTPException(status_code=400, detail="Результат теста не найден. Тест ещё не был начат")
+
+        if not test_result.started_at:
+            raise HTTPException(status_code=400, detail="Тест не был начат должным образом")
+        
+        started_at = test_result.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+
+        individual_deadline = started_at + timedelta(minutes=test.time_limit_minutes)
+        if now > individual_deadline:
+            raise HTTPException(status_code=400, detail="Время на выполнение теста истекло")
+
 
 def create_user_answer(db: Session, user_answer: UserAnswerCreate, user_id: str):
     employee = get_current_user(db, user_id)
@@ -958,11 +1051,11 @@ def create_user_answer(db: Session, user_answer: UserAnswerCreate, user_id: str)
     test = db.query(model.Test).filter(
         model.Test.id == user_answer.test_id,
         model.Test.is_active == True,
-        model.Test.end_date > datetime.now(timezone.utc)
     ).first()
     if not test:
         raise HTTPException(status_code=400, detail="Test not available")
 
+    validate_test_availability(db, test, employee)
     question = None
 
     if user_answer.question_type == "belbin":
@@ -1089,6 +1182,17 @@ def complete_test(db: Session, user_id: str, test_id: int):
     if test_result.is_completed:
         return {"message": "Тест уже завершён", "status": "completed"}
 
+    test = db.query(model.Test).filter(model.Test.id == test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Тест не найден")
+
+    # Если есть лимит времени, устанавливаем completed_at как started_at + time_limit
+    if test.time_limit_minutes and test_result.started_at:
+        test_result.completed_at = test_result.started_at + timedelta(minutes=test.time_limit_minutes)
+    else:
+        test_result.completed_at = datetime.now(timezone.utc)
+
+
     test_result.is_completed = True
     test_result.completed_at = datetime.now(timezone.utc)
     
@@ -1115,7 +1219,14 @@ def start_test(db: Session, user_id: str, test_id: int):
         .filter(Test.id == test_id)
         .first()
     )
+    now = datetime.now(timezone.utc)
 
+
+    if test.end_date and now > test.end_date:
+        raise HTTPException(status_code=400, detail="Срок действия теста истёк")
+
+    if test.status == "draft":
+        raise HTTPException(status_code=400, detail="Тест приостановлен")
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
 

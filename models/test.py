@@ -8,8 +8,8 @@ import pytest
 test_assignments = Table(
     "test_assignments",
     Base.metadata,
-    Column("test_id", Integer, ForeignKey("tests.id"), primary_key=True),
-    Column("employee_id", Integer, ForeignKey("employees.id"), primary_key=True),
+    Column("test_id", Integer, ForeignKey("tests.id", ondelete="CASCADE"), primary_key=True),
+    Column("employee_id", Integer, ForeignKey("employees.id", ondelete="CASCADE"), primary_key=True),
 )
 class TestSettings(Base):
     __tablename__ = "test_settings"
@@ -34,7 +34,7 @@ class Test(Base):
 
     image = Column(LargeBinary, nullable=True)  # 🔥 Хранение изображения
     status = Column(String, default="draft")
-    test_settings_id = Column(Integer, ForeignKey("test_settings.id")) 
+    test_settings_id = Column(Integer, ForeignKey("test_settings.id", ondelete="CASCADE")) 
     created_by = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"))
     end_date = Column(DateTime(timezone=True), default=None)
 
@@ -53,7 +53,7 @@ class Question(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     text = Column(String, index=True, nullable=False)
-    test_id = Column(Integer, ForeignKey("tests.id"))
+    test_id = Column(Integer, ForeignKey("tests.id", ondelete="CASCADE"))
     question_type = Column(String, default="single_choice")  # single_choice/multiple_choice/text_answer
     image = Column(LargeBinary, nullable=True)  
     order = Column(Integer, nullable=False)
@@ -69,7 +69,7 @@ class Answer(Base):
     id = Column(Integer, primary_key=True, index=True)
     text = Column(String)
     is_correct = Column(Boolean, default=False)
-    question_id = Column(Integer, ForeignKey("questions.id"))
+    question_id = Column(Integer, ForeignKey("questions.id", ondelete="CASCADE"))
     image = Column(LargeBinary, nullable=True)  # 🔥
 
     question = relationship("Question", back_populates="answers")
@@ -80,7 +80,7 @@ class TestResult(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
 
-    test_id = Column(Integer, ForeignKey("tests.id"))
+    test_id = Column(Integer, ForeignKey("tests.id", ondelete="CASCADE"))
     employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"))
 
     is_completed = Column(Boolean, default=False)
