@@ -1267,14 +1267,14 @@ def start_test(db: Session, user_id: str, test_id: int):
     # Строим безопасные схемы вопросов
     safe_questions = build_safe_questions(test.questions, user_answers_data)
     safe_belbin_questions = build_safe_belbin_questions(test.belbin_questions, belbin_answers_data)
+    test.started_at = started_at  # добавляем временно
 
     # Возвращаем финальную схему
     return create_safe_test_schema(
-        test=test,
-        status=status,
-        safe_questions=safe_questions,
-        safe_belbin_questions=safe_belbin_questions,
-        started_at=started_at
+        test,
+        status,
+        safe_questions,
+        safe_belbin_questions,
     )
 
 
