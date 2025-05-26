@@ -1221,7 +1221,6 @@ def start_test(db: Session, user_id: str, test_id: int):
     )
     now = datetime.now(timezone.utc)
 
-
     if test.end_date and now > test.end_date:
         raise HTTPException(status_code=400, detail="Срок действия теста истёк")
 

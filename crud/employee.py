@@ -14,7 +14,8 @@ def create_account(db:Session, employee: schema.EmployeeMinimal):
         existing_user = db.query(model.Employee).filter_by(clerk_id=employee.clerk_id).first()
         if existing_user:
             raise HTTPException(status_code=404, detail="user already exists.")
-
+        if employee.email == "":
+            employee.email = None  # или выбросить ошибку
         # Создаём нового пользователя
         new_user = model.Employee(
             **employee.dict()
@@ -70,6 +71,8 @@ def get_employees(db: Session, user_id: str):
 def create_employee(db: Session, employee: Union[schema.EmployeeCreate, schema.EmployeeCreateMinimal], photo: Union[bytes, None], user_id: str, employee_id: str):
     try:
         user = check_user_permissions(db, user_id, True)
+        if employee.email == "":
+            employee.email = None  # или выбросить ошибку
         db_employee = model.Employee(
             **employee.dict(exclude={"photo"}),
             created_by_id=user.id,
