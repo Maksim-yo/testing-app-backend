@@ -1077,7 +1077,29 @@ def create_user_answer(db: Session, user_answer: UserAnswerCreate, user_id: str)
         raise HTTPException(status_code=400, detail="Unknown question_type")
 
     # Валидация и сохранение ответа
-    if user_answer.question_type in ("single_choice", "multiple_choice", "text_answer"):
+    if user_answer.question_type == "text_answer":
+    # Для текстового ответа не нужны answer_ids
+        db_answer = db.query(UserAnswer).filter_by(
+            employee_id=employee.id,
+            test_id=user_answer.test_id,
+            question_id=user_answer.question_id
+        ).first()
+
+        if db_answer:
+            db_answer.text_response = user_answer.text_response
+        else:
+            db_answer = UserAnswer(
+                test_id=user_answer.test_id,
+                employee_id=employee.id,
+                question_id=user_answer.question_id,
+                text_response=user_answer.text_response
+            )
+            db.add(db_answer)
+
+        db.commit()
+        db.refresh(db_answer)
+        return db_answer
+    if user_answer.question_type in ("single_choice", "multiple_choice"):
         valid_answer_ids = {a.id for a in question.answers}
         for answer_id in user_answer.answer_ids:
             if answer_id not in valid_answer_ids:
