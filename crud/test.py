@@ -1259,14 +1259,23 @@ def start_test(db: Session, user_id: str, test_id: int):
             db.commit()
             db.refresh(test_result)
             status = "in_progress"
-    safe_test = SafeTest.model_validate(test, from_attributes=True)
-    safe_test.status = status  # Добавляем статус вручную
-    safe_test.started_at = (
-        existing_result.started_at if existing_result else test_result.started_at
+
+    started_at = existing_result.started_at if existing_result else now
+    user_answers_data = get_user_answers_data(db, test.id, employee.id)
+    belbin_answers_data = get_belbin_answers_data(db, test.id, employee.id)
+
+    # Строим безопасные схемы вопросов
+    safe_questions = build_safe_questions(test.questions, user_answers_data)
+    safe_belbin_questions = build_safe_belbin_questions(test.belbin_questions, belbin_answers_data)
+
+    # Возвращаем финальную схему
+    return create_safe_test_schema(
+        test=test,
+        status=status,
+        safe_questions=safe_questions,
+        safe_belbin_questions=safe_belbin_questions,
+        started_at=started_at
     )
-
-    return safe_test
-
 
 
 def assign_test_to_employees(db: Session, assignment: TestAssignmentCreate):
