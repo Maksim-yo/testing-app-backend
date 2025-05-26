@@ -574,7 +574,7 @@ def create_belbin_position(position: schemas.BelbinPositionRequirementCreate = B
 
 
 
-@app.put("/belbin-positions/{position_id}")
+@app.put("/belbin-positions/{position_id}/")
 def update_belbin_position(position_id: int, position: schemas.BelbinPositionRequirement, db: Session = Depends(get_db), current_user: UserData = Depends(get_current_user)):
     updated = crud.update_belbin_position(db, position, current_user.user_id)
     return updated
