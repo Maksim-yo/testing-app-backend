@@ -1299,25 +1299,49 @@ def start_test(db: Session, user_id: str, test_id: int):
     )
     test_result.started_at = started_at
     return test_result
-
 def assign_test_to_employees(db: Session, assignment: TestAssignmentCreate):
-    values = [
+    existing_assignments = set()
+    
+    # Проверяем существующие назначения
+    for item in assignment.assignments:
+        exists = db.query(model.test_assignments).filter(
+            model.test_assignments.c.employee_id == item.employee_id,
+            model.test_assignments.c.test_id == item.test_id
+        ).first()
+        if exists:
+            existing_assignments.add((item.employee_id, item.test_id))
+    
+    # Формируем список только новых назначений
+    new_assignments = [
         {"employee_id": item.employee_id, "test_id": item.test_id}
         for item in assignment.assignments
+        if (item.employee_id, item.test_id) not in existing_assignments
     ]
-
-    stmt = insert(model.test_assignments).values(values)
-    try:
+    
+    # Если есть новые назначения - добавляем их
+    if new_assignments:
+        stmt = insert(model.test_assignments).values(new_assignments)
         db.execute(stmt)
         db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Назначение уже существует"
-        )
     
-    return {"message": "Тест успешно назначен"}
+    # Формируем ответ
+    response = {
+        "added": len(new_assignments),
+        "already_existed": len(existing_assignments),
+        "details": {
+            "added": [
+                {"employee_id": a["employee_id"], "test_id": a["test_id"]}
+                for a in new_assignments
+            ],
+            "already_existed": [
+                {"employee_id": emp_id, "test_id": test_id}
+                for emp_id, test_id in existing_assignments
+            ]
+        }
+    }
+    
+    return response
+
 
 def get_test_results_with_employee(db: Session, test_id: int, user_id: int):
     employee = get_current_user(db, user_id)
