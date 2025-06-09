@@ -68,6 +68,66 @@ def build_safe_questions(questions: List[model.Question], user_answers_data: Tup
     
     return safe_questions
 
+def build_answers(
+    question: model.Question,
+    user_answers_by_qid: Dict[int, List[int]],
+    answer_ids_by_question: Dict[int, Set[int]]
+) -> List[SafeAnswer]:
+    user_answer = user_answers_by_qid.get(question.id)
+    selected_answer_ids = answer_ids_by_question.get(question.id, set())
+
+    selected_ids = answer_ids_by_question.get(question.id, set())
+    answers = []
+    if question.question_type == "text_answer" and user_answer and user_answer.text_response:
+        user_text = user_answer.text_response
+
+        # Получаем все допустимые правильные ответы
+        correct_texts = {
+            answer.text.strip().lower()
+            for answer in question.answers
+            if answer.text == user_text
+        }
+
+        # Сравниваем
+        is_correct = user_text in correct_texts
+
+
+        answers.append({
+            "id":None,
+            "question_id":question.id,
+            "text":user_answer.text_response,
+            "image":None,
+            "is_user_answer":True,
+            "is_correct":is_correct
+        })
+    else:
+        for answer in question.answers:
+            # Проверяем, выбрал ли пользователь этот ответ
+
+            answers.append({
+                "id": answer.id,
+                "text": answer.text,
+                "image": answer.image,
+                "is_correct": answer.is_correct,  # <- Добавляем флаг правильного ответа из БД
+                "selected": answer.id in selected_ids,
+            })
+    return answers
+
+def build_questions(questions: List[model.Question], user_answers_data: Tuple) -> List[SafeQuestion]:
+    user_answers_by_qid, answer_ids_by_question = user_answers_data
+    safe_questions = []
+    for question in questions:
+        safe_answers = build_answers(question, user_answers_by_qid, answer_ids_by_question)
+        safe_questions.append({
+            "id": question.id,
+            "text": question.text,
+            "question_type": question.question_type,
+            "order": question.order,
+            "test_id": question.test_id,
+            "image": question.image,
+            "answers": safe_answers,
+        })
+    return safe_questions
 
 def build_safe_answers(question: model.Question, user_answers_by_qid: Dict, answer_ids_by_question: Dict) -> List[SafeAnswer]:
     """Сформировать SafeAnswer объекты для вопроса."""
@@ -154,6 +214,25 @@ def create_safe_test_schema(test: model.Test, status: str,
         belbin_questions=belbin_questions,
         time_limit_minutes=test.time_limit_minutes
     )
+
+
+def create_test_schema(test: model.Test, status: str, 
+                           questions: List[SafeQuestion], 
+                           belbin_questions: List[SafeBelbinQuestion]) -> SafeTest:
+     return {
+        "id": test.id,
+        "title": test.title,
+        "description": test.description,
+        "is_active": test.is_active,
+        "created_at": test.created_at,
+        "updated_at": test.updated_at,
+        "end_date": test.end_date,
+        "status": status,
+        "questions": questions,
+        "belbin_questions": belbin_questions,
+        "time_limit_minutes": test.time_limit_minutes
+    }
+
 
 def answers_changed(old_answers, new_answers, belbin=False):
     if len(old_answers) != len(new_answers):
@@ -874,6 +953,10 @@ def change_test_status(db: Session, test_id: int, test_status: schema.TestStatus
     if not db_test:
         return None
 
+    # Проверка: если end_date прошла, не даём менять статус
+    if db_test.end_date and db_test.end_date < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Нельзя изменить статус — срок действия теста истёк.")
+
     # Обработка изменения статуса
     new_status = test_status.status
 
@@ -1047,7 +1130,7 @@ def validate_test_availability(db, test, employee):
 
 def create_user_answer(db: Session, user_answer: UserAnswerCreate, user_id: str):
     employee = get_current_user(db, user_id)
-
+    print(user_answer)
     test = db.query(model.Test).filter(
         model.Test.id == user_answer.test_id,
         model.Test.is_active == True,
@@ -1366,18 +1449,42 @@ def get_test_results_with_employee(db: Session, test_id: int, user_id: int):
         )
     )
 
-    results = db.execute(stmt).unique().scalars().all()
+
+    test_results = db.execute(stmt).unique().scalars().all()
 
     # Завершаем просроченные тесты
+    auto_complete_expired_tests(test_results, db)
+
+    now = datetime.now(timezone.utc)
+    results = []
     auto_complete_expired_tests(results, db)
 
-    # Возвращаем только завершённые
-    for r in results:
-        r.time_limit_minutes = r.test.time_limit_minutes
+    for result in test_results:
+        if not result.is_completed:
+            continue
 
-    # Валидация и возврат
-    return [TestResultSchema.model_validate(r) for r in results if r.is_completed]
+        test = result.test
+        employee_id = result.employee_id
 
+        # Ответы
+        user_answers_data = get_user_answers_data(db, test.id, employee_id)
+        belbin_answers_data = get_belbin_answers_data(db, test.id, employee_id)
+
+        # Вопросы с ответами
+        safe_questions = build_questions(test.questions, user_answers_data)
+        safe_belbin_questions = build_safe_belbin_questions(test.belbin_questions, belbin_answers_data)
+
+        # Статус
+        status = determine_test_status(db, test, employee_id, now)
+        result.time_limit_minutes = result.test.time_limit_minutes
+
+        # Сбор
+        results.append({
+            "test": create_test_schema(test, status, safe_questions, safe_belbin_questions),
+            "result": TestResultSchema.model_validate(result)
+        })
+
+    return results
 
 def remove_test_assignments(db: Session, assignment: TestAssignmentCreate):
     # Извлекаем test_id и список employee_id из переданных назначений
