@@ -487,6 +487,8 @@ def calculate_test_score(db: Session, test_id: int, employee_id: int) -> int:
                 )
                 .first()
             )
+            max_score += points
+
             if not user_answer:
                 continue
             # Получаем выбранный ответ из UserAnswerItem (один для single_choice)
@@ -497,11 +499,12 @@ def calculate_test_score(db: Session, test_id: int, employee_id: int) -> int:
             )
             if user_answer_item and user_answer_item.answer.is_correct:
                 score += points
-            max_score += points
 
 
         elif question.question_type == "multiple_choice":
             correct_answer_ids = {a.id for a in question.answers if a.is_correct}
+            max_score += points
+
             if not correct_answer_ids:
                 continue
 
@@ -521,11 +524,11 @@ def calculate_test_score(db: Session, test_id: int, employee_id: int) -> int:
 
             if selected_answer_ids == correct_answer_ids:
                 score += points
-            max_score += points
 
         elif question.question_type == "text_answer":
         # Получаем правильные варианты текста ответов
             correct_texts = {ans.text.strip().lower() for ans in question.answers if ans.is_correct}
+            max_score += points
             
             # Получаем ответ пользователя из UserAnswer
             user_answer = (
@@ -542,7 +545,6 @@ def calculate_test_score(db: Session, test_id: int, employee_id: int) -> int:
                 user_text = user_answer.text_response.strip().lower()
                 if user_text in correct_texts:
                     score += points
-            max_score += points
         
         elif question.question_type == "belbin":
             # Белбин считается отдельно
