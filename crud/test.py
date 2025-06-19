@@ -374,6 +374,7 @@ def create_test(db: Session, test: schema.TestCreate, user_id: str):
         end_date=test.end_date,
         created_by=db_employee.id,
         test_settings_id=db_settings.id if db_settings else None,
+        time_limit_minutes=test.time_limit_minutes
 
     )
     db.add(db_test)
