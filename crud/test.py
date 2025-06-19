@@ -79,16 +79,15 @@ def build_answers(
     selected_ids = answer_ids_by_question.get(question.id, set())
     answers = []
     if question.question_type == "text_answer" and user_answer and user_answer.text_response:
-        user_text = user_answer.text_response
+        user_text = user_answer.text_response.strip().lower()
 
-        # Получаем все допустимые правильные ответы
+        # Получаем все правильные ответы
         correct_texts = {
             answer.text.strip().lower()
             for answer in question.answers
-            if answer.text == user_text
+            if answer.is_correct  # а не по совпадению с user_text
         }
 
-        # Сравниваем
         is_correct = user_text in correct_texts
 
 
